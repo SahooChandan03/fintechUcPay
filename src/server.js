@@ -9,6 +9,7 @@ const redisClient = require('./config/redis');
 const onboardingRoutes = require('./routes/onboarding');
 
 const app = express();
+console.log("hi")
 
 // Middleware
 app.use(helmet());
