@@ -6,10 +6,6 @@ const jwtService = require('../utils/jwt');
 class OnboardingController {
 
 
-  constructor() {
-  this.register = this.register.bind(this);
-  this.requestOTP = this.requestOTP.bind(this);
-}
 
   // Request OTP for registration, login, or forgot password
   async requestOTP(req, res) {
@@ -17,14 +13,14 @@ class OnboardingController {
       const { identifier, purpose = 'registration' } = req.body;
 
       // Check rate limiting
-      const rateLimit = await otpService.checkRateLimit(identifier, purpose);
-      if (!rateLimit.allowed) {
-        return res.status(429).json({
-          success: false,
-          message: 'Too many OTP requests. Please try again later.',
-          remainingTime: Math.ceil(rateLimit.remainingTime / 1000 / 60) // minutes
-        });
-      }
+      // const rateLimit = await otpService.checkRateLimit(identifier, purpose);
+      // if (!rateLimit.allowed) {
+      //   return res.status(429).json({
+      //     success: false,
+      //     message: 'Too many OTP requests. Please try again later.',
+      //     remainingTime: Math.ceil(rateLimit.remainingTime / 1000 / 60) // minutes
+      //   });
+      // }
 
       // Check if OTP already exists
       const existingOTP = await otpService.otpExists(identifier, purpose);
@@ -70,12 +66,12 @@ class OnboardingController {
       // Send OTP via notification
       // await notificationService.sendOTP(identifier, otp, purpose);
 
-     return {
+     return  res.status(400).json({
         success: true,
         message: `OTP sent successfully to ${identifier}`,
         purpose,
         expiresIn: 300 // 5 minutes
-      };
+      });
     } catch (error) {
       console.error('OTP request error:', error);
       res.status(500).json({
@@ -149,25 +145,48 @@ class OnboardingController {
   //   }
   // }
 
-    async register(req, res) {
+  // Request OTP for mobile or email
+  async requestOTP(req, res) {
     try {
-      const {  emailOrMobile } = req.body;
+      const { emailOrMobile } = req.body;
 
-       // Check if user already exists
+      // Validate input
+      const isEmail = emailOrMobile.includes('@');
+      const isPhone = /^\+?[\d\s-()]+$/.test(emailOrMobile);
+      
+      if (!isEmail && !isPhone) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid email address or phone number'
+        });
+      }
+
+      // Check if user already exists with verified email/phone
       const existingUser = await User.findOne({
-        $or: [{ email:emailOrMobile }, { phoneNumber:emailOrMobile }]
+        $or: [
+          { email: emailOrMobile },
+          { phoneNumber: emailOrMobile }
+        ]
       });
 
       if (existingUser) {
         return res.status(400).json({
           success: false,
-          message: 'User already exists'
+          message: 'User already exists with this email or phone number'
         });
       }
 
-      req.body.emailOrMobile = emailOrMobile
-      // Verify OTP
-      const otpResult = await this.requestOTP(req,res);
+      // Store temporary user data in Redis
+      const type = isEmail ? 'email' : 'phone';
+      const tempUser = await otpService.storeTempUser(emailOrMobile, type);
+
+      // Request OTP
+      const otpType = isEmail ? 'email_verification' : 'phone_verification';
+      const otpResult = await otpService.requestOTPCommon({ 
+        identifier: emailOrMobile, 
+        type: otpType 
+      });
+
       if (!otpResult.success) {
         return res.status(400).json({
           success: false,
@@ -175,13 +194,214 @@ class OnboardingController {
         });
       }
 
+      res.status(200).json({
+        success: true,
+        message: `OTP sent successfully to ${emailOrMobile}`,
+        data: {
+          emailOrMobile,
+          type: isEmail ? 'email' : 'phone'
+        }
+      });
+    } catch (error) {
+      console.error('OTP request error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to send OTP. Please try again.'
+      });
+    }
+  }
+
+  // Verify OTP for mobile or email
+  async verifyOTP(req, res) {
+    try {
+      const { emailOrMobile, otp } = req.body;
+
+      // Validate input
+      const isEmail = emailOrMobile.includes('@');
+      const isPhone = /^\+?[\d\s-()]+$/.test(emailOrMobile);
+      
+      if (!isEmail && !isPhone) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid email address or phone number'
+        });
+      }
+
+      // Get temporary user from Redis
+      const tempUser = await otpService.getTempUser(emailOrMobile);
+
+      if (!tempUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'No pending verification found. Please request OTP first.'
+        });
+      }
+
+      // Verify OTP
+      const otpType = isEmail ? 'email_verification' : 'phone_verification';
+      const otpResult = await otpService.verifyOTP(emailOrMobile, otp, otpType);
+      
+      if (!otpResult.success) {
+        return res.status(400).json({
+          success: false,
+          message: otpResult.message
+        });
+      }
+
+      // Update verification status in Redis
+      const type = isEmail ? 'email' : 'phone';
+      const updatedTempUser = await otpService.updateTempUserVerification(emailOrMobile, type, true);
 
       res.status(200).json({
         success: true,
-        message: 'completed successfully',
+        message: 'OTP verified successfully',
+        data: {
+          emailOrMobile,
+          type: isEmail ? 'email' : 'phone',
+          verified: true,
+          isFullyVerified: updatedTempUser.isFullyVerified
+        }
       });
     } catch (error) {
-      console.error('Registration error:', error);
+      console.error('OTP verification error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'OTP verification failed. Please try again.'
+      });
+    }
+  }
+
+  // Complete signup with password
+  async signup(req, res) {
+    try {
+      const { email, phoneNumber, firstName, lastName, password } = req.body;
+
+      // Validate input
+      if (!email || !phoneNumber) {
+        return res.status(400).json({
+          success: false,
+          message: 'Both email and phone number are required'
+        });
+      }
+
+      // Validate email format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid email address'
+        });
+      }
+
+      // Validate phone format
+      const phoneRegex = /^\+?[\d\s-()]+$/;
+      if (!phoneRegex.test(phoneNumber)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid phone number'
+        });
+      }
+
+      // Check if both email and phone are verified in Redis
+      const emailTempUser = await otpService.getTempUser(email);
+      const phoneTempUser = await otpService.getTempUser(phoneNumber);
+      
+      if (!emailTempUser || !phoneTempUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'Both email and phone must be verified before signup'
+        });
+      }
+
+      if (!emailTempUser.emailVerified || !phoneTempUser.phoneVerified) {
+        return res.status(400).json({
+          success: false,
+          message: 'Both email and phone number must be verified before signup',
+          data: {
+            emailVerified: emailTempUser.emailVerified,
+            phoneVerified: phoneTempUser.phoneVerified,
+            email: email,
+            phoneNumber: phoneNumber
+          }
+        });
+      }
+
+      // Check if both email and phone are verified
+      if (!emailTempUser.emailVerified || !phoneTempUser.phoneVerified) {
+        return res.status(400).json({
+          success: false,
+          message: 'Both email and phone number must be verified before signup',
+          data: {
+            emailVerified: emailTempUser.emailVerified,
+            phoneVerified: phoneTempUser.phoneVerified,
+            email: email,
+            phoneNumber: phoneNumber
+          }
+        });
+      }
+
+      // Check if user already exists
+      const existingUser = await User.findOne({
+        $or: [
+          { email: email },
+          { phoneNumber: phoneNumber }
+        ]
+      });
+
+      if (existingUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'User already exists with these credentials'
+        });
+      }
+
+      // Create new user with verified data from Redis
+      const user = new User({
+        email: email,
+        phoneNumber: phoneNumber,
+        firstName,
+        lastName
+      });
+
+      // Hash password
+      await user.hashPassword(password);
+
+      // Save user
+      await user.save();
+
+      // Clean up temporary data from Redis
+      await otpService.deleteTempUser(email);
+      await otpService.deleteTempUser(phoneNumber);
+      
+      // Clear rate limits for both email and phone
+      await otpService.clearRateLimit(email, 'email_verification');
+      await otpService.clearRateLimit(phoneNumber, 'phone_verification');
+
+      // Generate tokens
+      const tokens = jwtService.generateTokens({
+        userId: user._id,
+        email: user.email,
+        roles: user.roles
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Registration completed successfully',
+        data: {
+          user: user.getPublicProfile(),
+          tokens
+        }
+      });
+    } catch (error) {
+      console.error('Signup error:', error);
+      
+      if (error.message.includes('already exists')) {
+        return res.status(400).json({
+          success: false,
+          message: error.message
+        });
+      }
+
       res.status(500).json({
         success: false,
         message: 'Registration failed. Please try again.'
@@ -192,11 +412,11 @@ class OnboardingController {
   // Login with email/phone and password
   async login(req, res) {
     try {
-      const { identifier, password } = req.body;
+      const { emailOrMobile, password } = req.body;
 
       // Find user by email or phone
       const user = await User.findOne({
-        $or: [{ email: identifier }, { phoneNumber: identifier }]
+        $or: [{ email: emailOrMobile }, { phoneNumber: emailOrMobile }]
       });
 
       if (!user) {

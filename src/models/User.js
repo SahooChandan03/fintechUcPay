@@ -27,13 +27,13 @@ const userSchema = new mongoose.Schema({
   },
   firstName: {
     type: String,
-    // required: true,
+    required: true,
     trim: true,
     maxlength: 50
   },
   lastName: {
     type: String,
-    // required: true,
+    required: true,
     trim: true,
     maxlength: 50
   },
@@ -87,6 +87,8 @@ userSchema.methods.getPublicProfile = function() {
   delete userObject.salt;
   return userObject;
 };
+
+
 
 // Pre-save middleware to ensure email and phone are unique
 userSchema.pre('save', async function(next) {

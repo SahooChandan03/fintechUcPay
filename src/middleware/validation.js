@@ -50,10 +50,39 @@ const validateRegistration = [
   handleValidationErrors
 ];
 
+// Validation rules for signup (final registration with password)
+const validateSignup = [
+  body('email')
+    .notEmpty()
+    .withMessage('Email is required')
+    .isEmail()
+    .withMessage('Please provide a valid email address')
+    .normalizeEmail(),
+  body('phoneNumber')
+    .notEmpty()
+    .withMessage('Phone number is required')
+    .matches(/^\+?[\d\s-()]+$/)
+    .withMessage('Please provide a valid phone number'),
+  body('firstName')
+    .trim()
+    .isLength({ min: 2, max: 50 })
+    .withMessage('First name must be between 2 and 50 characters'),
+  body('lastName')
+    .trim()
+    .isLength({ min: 2, max: 50 })
+    .withMessage('Last name must be between 2 and 50 characters'),
+  body('password')
+    .isLength({ min: 8 })
+    .withMessage('Password must be at least 8 characters long')
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
+    .withMessage('Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character'),
+  handleValidationErrors
+];
+
 
 // Validation rules for OTP request
 const validateOTPRequest = [
-  body('identifier')
+  body('emailOrMobile')
     .notEmpty()
     .withMessage('Email or phone number is required')
     .custom((value) => {
@@ -65,16 +94,12 @@ const validateOTPRequest = [
       }
       return true;
     }),
-  body('purpose')
-    .optional()
-    .isIn(['registration', 'login', 'forgotPassword'])
-    .withMessage('Invalid purpose'),
   handleValidationErrors
 ];
 
 // Validation rules for OTP verification
 const validateOTPVerification = [
-  body('identifier')
+  body('emailOrMobile')
     .notEmpty()
     .withMessage('Email or phone number is required'),
   body('otp')
@@ -82,16 +107,12 @@ const validateOTPVerification = [
     .withMessage('OTP must be 6 digits')
     .isNumeric()
     .withMessage('OTP must contain only numbers'),
-  body('purpose')
-    .optional()
-    .isIn(['registration', 'login', 'forgotPassword'])
-    .withMessage('Invalid purpose'),
   handleValidationErrors
 ];
 
 // Validation rules for login
 const validateLogin = [
-  body('identifier')
+  body('emailOrMobile')
     .notEmpty()
     .withMessage('Email or phone number is required'),
   body('password')
@@ -162,5 +183,6 @@ module.exports = {
   validatePasswordReset,
   validateProfileUpdate,
   validateRefreshToken,
-  validateUserId
+  validateUserId,
+  validateSignup
 }; 

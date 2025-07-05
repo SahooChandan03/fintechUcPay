@@ -15,20 +15,44 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json());
 
-// Rate limiting (global)
-const limiter = rateLimit({
+// Rate limiting (global) - more lenient for general API
+const globalLimiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 min
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 200, // Increased limit
   standardHeaders: true,
   legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many requests, please try again later.'
+  }
 });
-app.use(limiter);
+app.use(globalLimiter);
+
+// Specific rate limiting for onboarding routes
+const onboardingLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Increased to 100 requests per 15 minutes for onboarding
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many onboarding requests, please try again later.'
+  },
+  // Add a key generator that's more lenient for development
+  keyGenerator: (req) => {
+    // In development, use a more generic key to avoid strict rate limiting
+    if (process.env.NODE_ENV === 'development') {
+      return 'dev-user';
+    }
+    return req.ip;
+  }
+});
 
 // Health check
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok', service: 'uc-pay-backend' }));
 
-// Onboarding routes
-app.use('/api/onboarding', onboardingRoutes);
+// Onboarding routes with specific rate limiting
+app.use('/api/onboarding', onboardingLimiter, onboardingRoutes);
 
 // 404 handler
 app.use((req, res, next) => {
